@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Water History Target Card visual harness</title>
+    <style>
+      :root {
+        --card-background-color: #fff;
+        --primary-text-color: #111;
+        --secondary-text-color: #555;
+        --divider-color: #d8d8d8;
+        --ha-card-border-radius: 18px;
+        --ha-card-border-width: 1px;
+        --ha-card-border-color: #ddd;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 16px; background: #f5f5f5; font-family: Arial, sans-serif; }
+      water-history-target-card { width: 100%; max-width: 820px; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import "../water-history-target-card.js";
+
+      const entity = "sensor.water_tank_level";
+      const targetEntity = "input_number.water_tank_target";
+      const now = Date.now();
+      const rows = Array.from({ length: 289 }, (_, index) => {
+        const phase = index / 18;
+        return {
+          start: now - (288 - index) * 5 * 60 * 1000,
+          mean: 228 + 18 * Math.sin(phase) + 4 * Math.sin(phase * 3),
+        };
+      });
+      const states = {
+        [entity]: { state: "237", attributes: { unit_of_measurement: "L" } },
+        [targetEntity]: { state: "300", attributes: { min: 0, max: 500, step: 10 } },
+      };
+      const card = document.createElement("water-history-target-card");
+      const hass = {
+        states,
+        callWS: async () => ({ [entity]: rows }),
+        callService: async (_domain, _service, data) => {
+          window.serviceCalls.push(data);
+          states[targetEntity] = { ...states[targetEntity], state: String(data.value) };
+          card.hass = { ...hass, states: { ...states } };
+        },
+      };
+      window.serviceCalls = [];
+      card.setConfig({
+        type: "custom:water-history-target-card",
+        config_version: 1,
+        entity,
+        target_entity: targetEntity,
+        hours: 24,
+        period: "5minute",
+        min: 0,
+        max: 500,
+        step: 10,
+      });
+      card.hass = hass;
+      document.body.append(card);
+      window.cardReady = true;
+    </script>
+  </body>
+</html>
