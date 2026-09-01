@@ -2,6 +2,8 @@
 
 A dependency-free Home Assistant Lovelace card that draws Recorder statistics and an editable target in one SVG coordinate system. The target is previewed locally while dragging and written to `input_number` exactly once when the pointer is released.
 
+![Synthetic preview of the water history card](docs/preview.png)
+
 ## Version
 
 Current package version: **v1.0.0**.
