@@ -530,7 +530,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           margin: 0 -6px 0 0;
           padding: 4px 6px;
           background: transparent;
-          color: #e53935;
+          color: #000;
           font: inherit;
           font-size: 15px;
           font-weight: 600;
@@ -540,8 +540,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           touch-action: manipulation;
         }
         .target-header:hover,
-        .target-header:focus-visible { background: color-mix(in srgb, #e53935 10%, transparent); }
-        .target-header:focus-visible { outline: 2px solid #e53935; outline-offset: 1px; }
+        .target-header:focus-visible { background: color-mix(in srgb, #607d8b 10%, transparent); }
+        .target-header:focus-visible { outline: 2px solid #607d8b; outline-offset: 1px; }
         .target-header:disabled { color: var(--secondary-text-color); cursor: default; opacity: 0.72; }
         .chart { position: relative; width: 100%; height: ${CHART_HEIGHT}px; }
         svg {
@@ -597,19 +597,19 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           font-variant-numeric: tabular-nums;
         }
         .target-line {
-          stroke: #e53935;
+          stroke: #607d8b;
           stroke-width: 1;
           vector-effect: non-scaling-stroke;
           pointer-events: none;
         }
         .target-label {
-          fill: #e53935;
+          fill: #607d8b;
           font-size: 12px;
           font-weight: 600;
           pointer-events: none;
         }
         .target-hit {
-          fill: #e53935;
+          fill: #607d8b;
           fill-opacity: 0.001;
           pointer-events: all;
           cursor: ns-resize;
@@ -643,7 +643,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           font: inherit;
           font-size: 20px;
         }
-        .target-input:focus { border-color: #e53935; outline: 2px solid color-mix(in srgb, #e53935 25%, transparent); }
+        .target-input:focus { border-color: #607d8b; outline: 2px solid color-mix(in srgb, #607d8b 25%, transparent); }
         .target-dialog-error { min-height: 18px; color: var(--error-color, #db4437); font-size: 13px; }
         .target-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
         .target-dialog-actions button {

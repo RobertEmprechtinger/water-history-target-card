@@ -22,12 +22,15 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         const card = document.querySelector("water-history-target-card");
         const root = card.shadowRoot;
         const target = root.querySelector(".target-line");
+        const headerTarget = root.querySelector(".target-header");
         const targetY = Number(target.getAttribute("y1"));
         const matchingGrid = [...root.querySelectorAll(".grid-line")]
           .some((line) => Math.abs(Number(line.getAttribute("y1")) - targetY) < 0.01);
         return {
           headerTarget: root.querySelector(".target-header").textContent,
           headerTargetHeight: root.querySelector(".target-header").getBoundingClientRect().height,
+          headerTargetColor: getComputedStyle(headerTarget).color,
+          cardBackground: getComputedStyle(root.querySelector("ha-card")).backgroundColor,
           label: root.querySelector(".target-label").textContent,
           stroke: getComputedStyle(target).stroke,
           strokeWidth: getComputedStyle(target).strokeWidth,
@@ -36,6 +39,8 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         };
       });
       if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
+          initial.headerTargetColor !== "rgb(0, 0, 0)" ||
+          initial.cardBackground !== "rgb(255, 255, 255)" ||
           initial.label !== "Ziel · 300 L" || !initial.matchingGrid || initial.overflow) {
         throw new Error(`Initial visual invariant failed at ${width}px: ${JSON.stringify(initial)}`);
       }
@@ -180,6 +185,10 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
             .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
         });
         await page.waitForFunction(() => window.serviceCalls.length === 1);
+        await page.waitForFunction(() => {
+          const root = document.querySelector("water-history-target-card")?.shadowRoot;
+          return root?.querySelector(".target-label")?.textContent === "Ziel · 200 L";
+        });
         const dialogCommit = await page.evaluate(() => {
           const root = document.querySelector("water-history-target-card").shadowRoot;
           return {

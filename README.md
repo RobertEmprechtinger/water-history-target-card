@@ -6,7 +6,7 @@ A dependency-free Home Assistant Lovelace card that draws Recorder statistics an
 
 ## Version
 
-Current package version: **v1.0.1**.
+Current package version: **v1.0.2**.
 
 ## Installation with HACS
 
