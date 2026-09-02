@@ -6,7 +6,7 @@ A dependency-free Home Assistant Lovelace card that draws Recorder statistics an
 
 ## Version
 
-Current package version: **v1.0.0**.
+Current package version: **v1.0.1**.
 
 ## Installation with HACS
 
@@ -40,12 +40,18 @@ step: 10
 | `max` | no | `500` | Upper chart and target bound. |
 | `step` | no | `10` | Local snap and keyboard increment. |
 
-The line supports mouse, touch, pen, and keyboard. Arrow keys change one step,
-Page Up/Down ten steps, and Home/End select the bounds. Pointer cancellation
-never writes. Keyboard changes are committed once on key release; Escape or
-focus loss discards the keyboard preview. If Home Assistant does not confirm a
-write through the target entity within five seconds, the preview is reverted
-and a visible status message is shown.
+The line supports mouse, touch, pen, and keyboard. Its tablet-safe 72-pixel hit
+area keeps tracking on the window when SVG pointer capture is unavailable, and
+the grab offset prevents the line from jumping under the finger. Arrow keys
+change one step, Page Up/Down ten steps, and Home/End select the bounds. Pointer
+cancellation never writes.
+
+The current target is also shown as a button at the top right. It opens an
+accessible numeric dialog and accepts only values inside the configured range
+that match the configured step. Dragging, keyboard input, and the dialog all
+reuse the same exactly-once service-call path. If Home Assistant does not
+confirm a write through the target entity within five seconds, the preview is
+reverted and a visible status message is shown.
 
 ## Data and permissions
 

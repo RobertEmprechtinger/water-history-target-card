@@ -34,6 +34,15 @@ export function snapValue(value, min, max, step) {
   return Number(clamp(snapped, min, max).toFixed(10));
 }
 
+export function normalizeTargetInput(value, min, max, step) {
+  const candidate = typeof value === "string" ? value.trim().replace(",", ".") : value;
+  const numeric = finiteNumber(candidate);
+  if (numeric === null || numeric < min || numeric > max) return null;
+  const steps = (numeric - min) / step;
+  if (Math.abs(steps - Math.round(steps)) > 1e-9) return null;
+  return Number(numeric.toFixed(10));
+}
+
 export function valueFromY(y, plotTop, plotBottom, min, max, step) {
   if (plotBottom <= plotTop) return min;
   const ratio = clamp((plotBottom - y) / (plotBottom - plotTop), 0, 1);
@@ -383,6 +392,18 @@ export class TargetInteractionController {
     if (wasActive) this.onPreview(this.value);
   }
 
+  commitValue(value, source = "prompt") {
+    if (this.active || this.persisted === null) return false;
+    const normalized = snapValue(value, this.min, this.max, this.step);
+    if (normalized === null) return false;
+    this.value = normalized;
+    this.onPreview(this.value);
+    if (this.value === this.persisted) return true;
+    this.persisted = this.value;
+    this.onCommit(this.value, source);
+    return true;
+  }
+
   #commitIfChanged(source) {
     if (this.value === null || this.value === this.persisted) return;
     this.persisted = this.value;
@@ -419,6 +440,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._plotPoints = [];
     this._historyInspection = null;
     this._historyPointerCandidate = null;
+    this._pointerGrabOffsetY = null;
     this._controller = null;
     this._pendingTarget = null;
     this._pendingTimer = null;
@@ -481,15 +503,46 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           border-radius: var(--ha-card-border-radius, 12px);
           box-shadow: var(--ha-card-box-shadow, none);
         }
+        .header-row {
+          min-height: 44px;
+          box-sizing: border-box;
+          padding: 4px 10px 0 16px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
         .header {
-          min-height: 24px;
-          padding: 14px 16px 4px;
+          min-width: 0;
+          flex: 1 1 auto;
           color: var(--primary-text-color);
           font-size: 16px;
           font-weight: 500;
           line-height: 24px;
         }
         .header.unavailable { color: var(--secondary-text-color); }
+        .target-header {
+          flex: 0 0 auto;
+          appearance: none;
+          border: 0;
+          border-radius: 8px;
+          min-height: 44px;
+          margin: 0 -6px 0 0;
+          padding: 4px 6px;
+          background: transparent;
+          color: #e53935;
+          font: inherit;
+          font-size: 15px;
+          font-weight: 600;
+          line-height: 24px;
+          white-space: nowrap;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .target-header:hover,
+        .target-header:focus-visible { background: color-mix(in srgb, #e53935 10%, transparent); }
+        .target-header:focus-visible { outline: 2px solid #e53935; outline-offset: 1px; }
+        .target-header:disabled { color: var(--secondary-text-color); cursor: default; opacity: 0.72; }
         .chart { position: relative; width: 100%; height: ${CHART_HEIGHT}px; }
         svg {
           display: block;
@@ -556,15 +609,54 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           pointer-events: none;
         }
         .target-hit {
-          stroke: transparent;
-          stroke-width: 44;
-          vector-effect: non-scaling-stroke;
-          pointer-events: stroke;
+          fill: #e53935;
+          fill-opacity: 0.001;
+          pointer-events: all;
           cursor: ns-resize;
           touch-action: none;
           outline: none;
         }
-        .target-hit:focus-visible { stroke: color-mix(in srgb, #e53935 18%, transparent); }
+        .target-hit:focus-visible { fill-opacity: 0.12; }
+        dialog {
+          width: min(320px, calc(100vw - 32px));
+          box-sizing: border-box;
+          padding: 20px;
+          border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
+          border-radius: var(--ha-card-border-radius, 12px);
+          background: var(--ha-card-background, var(--card-background-color, #fff));
+          color: var(--primary-text-color);
+          box-shadow: var(--ha-card-box-shadow, 0 8px 30px rgba(0, 0, 0, 0.28));
+        }
+        dialog::backdrop { background: rgba(0, 0, 0, 0.42); }
+        .target-form { display: grid; gap: 14px; }
+        .target-form h2 { margin: 0; font-size: 20px; line-height: 28px; }
+        .target-form label { display: grid; gap: 6px; font-size: 14px; }
+        .target-input {
+          box-sizing: border-box;
+          width: 100%;
+          min-height: 46px;
+          padding: 8px 10px;
+          border: 1px solid var(--divider-color, #bdbdbd);
+          border-radius: 8px;
+          background: var(--primary-background-color, #fff);
+          color: var(--primary-text-color);
+          font: inherit;
+          font-size: 20px;
+        }
+        .target-input:focus { border-color: #e53935; outline: 2px solid color-mix(in srgb, #e53935 25%, transparent); }
+        .target-dialog-error { min-height: 18px; color: var(--error-color, #db4437); font-size: 13px; }
+        .target-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+        .target-dialog-actions button {
+          min-height: 40px;
+          padding: 7px 12px;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--primary-color, #03a9f4);
+          font: inherit;
+          font-weight: 600;
+        }
+        .target-dialog-actions .save { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
         .status {
           position: absolute;
           inset: 42% 16px auto;
@@ -577,7 +669,10 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
         [hidden] { display: none !important; }
       </style>
       <ha-card>
-        <div class="header">Wasser: —</div>
+        <div class="header-row">
+          <div class="header">Wasser: —</div>
+          <button class="target-header" type="button" aria-haspopup="dialog" aria-controls="target-dialog" disabled>Ziel: —</button>
+        </div>
         <div class="chart">
           <svg viewBox="0 0 600 ${CHART_HEIGHT}" role="img" aria-label="Wasserverlauf der letzten 24 Stunden">
             <defs><clipPath id="plot-clip"><rect></rect></clipPath></defs>
@@ -597,14 +692,28 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
             <g class="target">
               <line class="target-line"></line>
               <text class="target-label" text-anchor="end"></text>
-              <line class="target-hit" tabindex="0" focusable="true" role="slider" aria-label="Zielmenge" aria-orientation="vertical"></line>
+              <rect class="target-hit" tabindex="0" focusable="true" role="slider" aria-label="Zielmenge" aria-orientation="vertical"></rect>
             </g>
           </svg>
           <div class="status" role="status" aria-live="polite" hidden></div>
         </div>
+        <dialog class="target-dialog" id="target-dialog">
+          <form class="target-form" novalidate>
+            <h2>Zielwert</h2>
+            <label>Zielmenge in Litern
+              <input class="target-input" type="number" inputmode="numeric" enterkeyhint="done" required>
+            </label>
+            <div class="target-dialog-error" role="alert" aria-live="polite"></div>
+            <div class="target-dialog-actions">
+              <button class="cancel" type="button">Abbrechen</button>
+              <button class="save" type="submit">Übernehmen</button>
+            </div>
+          </form>
+        </dialog>
       </ha-card>
     `;
     this._header = this.shadowRoot.querySelector(".header");
+    this._targetHeader = this.shadowRoot.querySelector(".target-header");
     this._chart = this.shadowRoot.querySelector(".chart");
     this._svg = this.shadowRoot.querySelector("svg");
     this._clipRect = this.shadowRoot.querySelector("clipPath rect");
@@ -621,6 +730,11 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._targetLabel = this.shadowRoot.querySelector(".target-label");
     this._targetHit = this.shadowRoot.querySelector(".target-hit");
     this._status = this.shadowRoot.querySelector(".status");
+    this._targetDialog = this.shadowRoot.querySelector(".target-dialog");
+    this._targetForm = this.shadowRoot.querySelector(".target-form");
+    this._targetInput = this.shadowRoot.querySelector(".target-input");
+    this._targetDialogError = this.shadowRoot.querySelector(".target-dialog-error");
+    this._targetDialogCancel = this.shadowRoot.querySelector(".target-dialog-actions .cancel");
     this._domReady = true;
   }
 
@@ -636,20 +750,38 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       onPreview: () => this._scheduleDraw(),
       onCommit: (value) => this._commitTarget(value),
     });
-    this._targetHit.addEventListener("pointerdown", (event) => this._onPointerDown(event), { signal });
-    this._targetHit.addEventListener("pointermove", (event) => this._onPointerMove(event), { signal });
-    this._targetHit.addEventListener("pointerup", (event) => this._onPointerUp(event), { signal });
-    this._targetHit.addEventListener("pointercancel", (event) => this._onPointerCancel(event), { signal });
+    this._targetHit.addEventListener("pointerdown", (event) => this._onPointerDown(event), { signal, passive: false });
     this._targetHit.addEventListener("lostpointercapture", (event) => this._onPointerCancel(event), { signal });
     this._targetHit.addEventListener("keydown", (event) => this._onKeyDown(event), { signal });
     this._targetHit.addEventListener("keyup", (event) => this._onKeyUp(event), { signal });
     this._targetHit.addEventListener("blur", () => this._onTargetBlur(), { signal });
+    this._targetHeader.addEventListener("click", () => this._openTargetPrompt(), { signal });
+    this._targetForm.addEventListener("submit", (event) => this._onTargetFormSubmit(event), { signal });
+    this._targetDialogCancel.addEventListener("click", () => this._targetDialog.close("cancel"), { signal });
+    this._targetDialog.addEventListener("close", () => {
+      try { this._targetHeader.focus({ preventScroll: true }); } catch { this._targetHeader.focus(); }
+    }, { signal });
     this._historyHit.addEventListener("pointerdown", (event) => this._onHistoryPointerDown(event), { signal });
     this._historyHit.addEventListener("pointermove", (event) => this._onHistoryPointerMove(event), { signal });
     this._historyHit.addEventListener("pointerup", (event) => this._onHistoryPointerUp(event), { signal });
     this._historyHit.addEventListener("pointercancel", (event) => this._onHistoryPointerCancel(event), { signal });
     this._historyHit.addEventListener("pointerleave", () => this._onHistoryPointerLeave(), { signal });
     if (typeof window !== "undefined") {
+      window.addEventListener("pointermove", (event) => this._onPointerMove(event), {
+        signal, passive: false, capture: true,
+      });
+      window.addEventListener("pointerup", (event) => this._onPointerUp(event), {
+        signal, passive: false, capture: true,
+      });
+      window.addEventListener("pointercancel", (event) => this._onPointerCancel(event), {
+        signal, passive: false, capture: true,
+      });
+      window.addEventListener("blur", () => {
+        const pointerId = this._controller?.pointerId;
+        if (pointerId !== null && pointerId !== undefined) {
+          this._onPointerCancel({ pointerId, cancelable: false });
+        }
+      }, { signal });
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") this._hideHistoryInspection();
       }, { signal });
@@ -677,6 +809,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._plotPoints = [];
     this._historyInspection = null;
     this._historyPointerCandidate = null;
+    this._pointerGrabOffsetY = null;
+    if (this._targetDialog?.open) this._targetDialog.close("disconnect");
     this._historyInspector?.setAttribute("display", "none");
     if (this._redrawFrame !== null && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(this._redrawFrame);
@@ -712,6 +846,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._header.textContent = `Wasser: ${water === null ? "—" : `${Math.round(water)} L`}`;
     this._header.classList.toggle("unavailable", water === null);
     const target = finiteNumber(this._hass.states?.[this._config.target_entity]?.state);
+    this._updateTargetHeader(target);
     if (
       this._pendingTarget !== null &&
       this._pendingTarget.generation === this._commitGeneration &&
@@ -818,10 +953,80 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._scheduleDraw();
   }
 
+  _updateTargetHeader(target) {
+    if (!this._targetHeader) return;
+    const value = finiteNumber(target);
+    this._targetHeader.textContent = value === null ? "Ziel: —" : `Ziel: ${Math.round(value)} L`;
+    this._targetHeader.disabled = value === null;
+    if (value === null && this._targetDialog?.open) this._targetDialog.close("unavailable");
+    this._targetHeader.setAttribute(
+      "aria-label",
+      value === null ? "Zielwert nicht verfügbar" : `Zielwert ${Math.round(value)} Liter bearbeiten`,
+    );
+  }
+
+  _openTargetPrompt() {
+    const current = this._controller?.value;
+    if (current === null || current === undefined) return false;
+    this._targetError = null;
+    this._targetDialogError.textContent = "";
+    this._targetInput.removeAttribute("aria-invalid");
+    this._targetInput.min = String(this._config.min);
+    this._targetInput.max = String(this._config.max);
+    this._targetInput.step = String(this._config.step);
+    this._targetInput.value = String(current);
+    if (typeof this._targetDialog?.showModal === "function") {
+      if (!this._targetDialog.open) this._targetDialog.showModal();
+      Promise.resolve().then(() => {
+        try { this._targetInput.focus({ preventScroll: true }); } catch { this._targetInput.focus(); }
+        this._targetInput.select();
+      });
+      return true;
+    }
+    const raw = typeof globalThis.window?.prompt === "function"
+      ? globalThis.window.prompt(`Zielwert in Litern (${this._config.min}–${this._config.max})`, String(current))
+      : null;
+    if (raw === null) return false;
+    const value = normalizeTargetInput(raw, this._config.min, this._config.max, this._config.step);
+    if (value === null) {
+      this._targetError =
+        `Ziel muss zwischen ${this._config.min} und ${this._config.max} Litern ` +
+        `in ${this._config.step}-Liter-Schritten liegen.`;
+      this._scheduleDraw();
+      return false;
+    }
+    return this._controller.commitValue(value, "prompt");
+  }
+
+  _onTargetFormSubmit(event) {
+    event.preventDefault();
+    const value = normalizeTargetInput(
+      this._targetInput.value,
+      this._config.min,
+      this._config.max,
+      this._config.step,
+    );
+    if (value === null) {
+      this._targetDialogError.textContent =
+        `Bitte einen Wert von ${this._config.min} bis ${this._config.max} L ` +
+        `in ${this._config.step}-L-Schritten eingeben.`;
+      this._targetInput.setAttribute("aria-invalid", "true");
+      try { this._targetInput.focus({ preventScroll: true }); } catch { this._targetInput.focus(); }
+      return false;
+    }
+    this._targetDialogError.textContent = "";
+    this._targetInput.removeAttribute("aria-invalid");
+    const accepted = this._controller?.commitValue(value, "prompt") ?? false;
+    this._targetDialog.close("save");
+    this._scheduleDraw();
+    return accepted;
+  }
+
   _eventValue(event) {
     const rectangle = this._svg.getBoundingClientRect();
     if (!this._geometry || rectangle.height <= 0) return this._config.min;
-    const svgY = (event.clientY - rectangle.top) * (CHART_HEIGHT / rectangle.height);
+    const adjustedClientY = event.clientY - (this._pointerGrabOffsetY ?? 0);
+    const svgY = (adjustedClientY - rectangle.top) * (CHART_HEIGHT / rectangle.height);
     return valueFromY(
       svgY,
       this._geometry.top,
@@ -926,28 +1131,45 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     if (event.isPrimary === false) return;
     this._historyPointerCandidate = null;
     this._hideHistoryInspection();
-    if (!this._controller?.beginPointer(event.pointerId, this._eventValue(event))) return;
-    event.preventDefault();
-    if (!capturePointer(this._targetHit, event.pointerId)) {
-      this._controller.cancelPointer(event.pointerId);
-      this._scheduleDraw();
+    const current = this._controller?.value;
+    if (current === null || current === undefined || !this._geometry) return;
+    const rectangle = this._svg.getBoundingClientRect();
+    if (rectangle.height <= 0) return;
+    const ratio = (current - this._config.min) / (this._config.max - this._config.min);
+    const lineSvgY = this._geometry.bottom - ratio * (this._geometry.bottom - this._geometry.top);
+    const lineClientY = rectangle.top + lineSvgY * (rectangle.height / CHART_HEIGHT);
+    this._pointerGrabOffsetY = event.clientY - lineClientY;
+    if (!this._controller.beginPointer(event.pointerId, current)) {
+      this._pointerGrabOffsetY = null;
+      return;
     }
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation?.();
+    try { this._targetHit.focus({ preventScroll: true }); } catch { this._targetHit.focus?.(); }
+    capturePointer(this._targetHit, event.pointerId);
   }
 
   _onPointerMove(event) {
     if (!this._controller?.movePointer(event.pointerId, this._eventValue(event))) return;
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation?.();
   }
 
   _onPointerUp(event) {
     if (this._controller?.pointerId !== event.pointerId) return;
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation?.();
     this._controller.endPointer(event.pointerId);
+    this._pointerGrabOffsetY = null;
     releasePointer(this._targetHit, event.pointerId);
   }
 
   _onPointerCancel(event) {
     if (!this._controller?.cancelPointer(event.pointerId)) return;
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation?.();
+    this._pointerGrabOffsetY = null;
+    releasePointer(this._targetHit, event.pointerId);
     this._scheduleDraw();
   }
 
@@ -1129,21 +1351,32 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     if (target === null || target === undefined) {
       this._targetGroup.setAttribute("display", "none");
       this._targetHit.setAttribute("aria-disabled", "true");
+      this._updateTargetHeader(null);
       return;
     }
     this._targetGroup.removeAttribute("display");
     this._targetHit.removeAttribute("aria-disabled");
     const ratio = (target - this._config.min) / (this._config.max - this._config.min);
     const y = geometry.bottom - ratio * (geometry.bottom - geometry.top);
-    for (const line of [this._targetLine, this._targetHit]) {
-      line.setAttribute("x1", String(geometry.left));
-      line.setAttribute("x2", String(geometry.right));
-      line.setAttribute("y1", String(y));
-      line.setAttribute("y2", String(y));
-    }
+    for (const [name, value] of Object.entries({
+      x1: geometry.left,
+      x2: geometry.right,
+      y1: y,
+      y2: y,
+    })) this._targetLine.setAttribute(name, String(value));
+    const hitHeight = Math.min(72, geometry.bottom - geometry.top);
+    const hitTop = clamp(y - hitHeight / 2, geometry.top, geometry.bottom - hitHeight);
+    for (const [name, value] of Object.entries({
+      x: geometry.left,
+      y: hitTop,
+      width: geometry.right - geometry.left,
+      height: hitHeight,
+      rx: 4,
+    })) this._targetHit.setAttribute(name, String(value));
     this._targetLabel.setAttribute("x", String(geometry.right - 5));
     this._targetLabel.setAttribute("y", String(y < geometry.top + 18 ? y + 16 : y - 7));
     this._targetLabel.textContent = `Ziel · ${target} L`;
+    this._updateTargetHeader(target);
     this._targetHit.setAttribute("aria-valuemin", String(this._config.min));
     this._targetHit.setAttribute("aria-valuemax", String(this._config.max));
     this._targetHit.setAttribute("aria-valuenow", String(target));

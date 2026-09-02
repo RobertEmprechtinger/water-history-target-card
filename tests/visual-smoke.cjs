@@ -26,6 +26,8 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         const matchingGrid = [...root.querySelectorAll(".grid-line")]
           .some((line) => Math.abs(Number(line.getAttribute("y1")) - targetY) < 0.01);
         return {
+          headerTarget: root.querySelector(".target-header").textContent,
+          headerTargetHeight: root.querySelector(".target-header").getBoundingClientRect().height,
           label: root.querySelector(".target-label").textContent,
           stroke: getComputedStyle(target).stroke,
           strokeWidth: getComputedStyle(target).strokeWidth,
@@ -33,7 +35,8 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           overflow: document.documentElement.scrollWidth > innerWidth,
         };
       });
-      if (initial.label !== "Ziel · 300 L" || !initial.matchingGrid || initial.overflow) {
+      if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
+          initial.label !== "Ziel · 300 L" || !initial.matchingGrid || initial.overflow) {
         throw new Error(`Initial visual invariant failed at ${width}px: ${JSON.stringify(initial)}`);
       }
 
@@ -88,19 +91,35 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         const points = await page.evaluate(() => {
           const root = document.querySelector("water-history-target-card").shadowRoot;
           const hit = root.querySelector(".target-hit").getBoundingClientRect();
+          const line = root.querySelector(".target-line").getBoundingClientRect();
           const grid = [...root.querySelectorAll(".grid-line")];
           const target200 = grid[2].getBoundingClientRect();
+          root.querySelector(".target-hit").setPointerCapture = () => {
+            throw new Error("simulated SVG pointer-capture failure");
+          };
+          const fromY = hit.top + 5;
+          const grabOffset = fromY - (line.top + line.height / 2);
           return {
-            from: { x: hit.left + hit.width / 2, y: hit.top + hit.height / 2 },
-            to: { x: hit.left + hit.width / 2, y: target200.top + target200.height / 2 },
+            from: { x: hit.left + hit.width / 2, y: fromY },
+            to: {
+              x: hit.left + hit.width / 2,
+              y: target200.top + target200.height / 2 + grabOffset,
+            },
           };
         });
         await page.mouse.move(points.from.x, points.from.y);
         await page.mouse.down();
-        const targetHasPriority = await page.evaluate(() =>
-          document.querySelector("water-history-target-card").shadowRoot
-            .querySelector(".history-inspector").getAttribute("display") === "none");
-        if (!targetHasPriority) throw new Error("Target drag did not hide history inspection.");
+        const downState = await page.evaluate(() => {
+          const root = document.querySelector("water-history-target-card").shadowRoot;
+          return {
+            historyHidden: root.querySelector(".history-inspector").getAttribute("display") === "none",
+            label: root.querySelector(".target-label").textContent,
+            calls: window.serviceCalls.length,
+          };
+        });
+        if (!downState.historyHidden || downState.label !== "Ziel · 300 L" || downState.calls !== 0) {
+          throw new Error(`Target pointer-down invariant failed: ${JSON.stringify(downState)}`);
+        }
         await page.mouse.move(points.to.x, points.to.y, { steps: 6 });
         await page.mouse.up();
         await page.waitForFunction(() => window.serviceCalls.length === 1);
@@ -110,12 +129,69 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           const gridY = Number([...root.querySelectorAll(".grid-line")][2].getAttribute("y1"));
           return {
             calls: window.serviceCalls,
+            headerTarget: root.querySelector(".target-header").textContent,
             label: root.querySelector(".target-label").textContent,
             aligned: Math.abs(targetY - gridY) < 0.01,
           };
         });
-        if (committed.calls[0].value !== 200 || committed.label !== "Ziel · 200 L" || !committed.aligned) {
+        if (committed.calls[0].value !== 200 || committed.headerTarget !== "Ziel: 200 L" ||
+            committed.label !== "Ziel · 200 L" || !committed.aligned) {
           throw new Error(`Drag invariant failed: ${JSON.stringify(committed)}`);
+        }
+      } else {
+        await page.locator("water-history-target-card").evaluate((card) =>
+          card.shadowRoot.querySelector(".target-header").click());
+        const dialog = await page.evaluate(() => {
+          const root = document.querySelector("water-history-target-card").shadowRoot;
+          const input = root.querySelector(".target-input");
+          return {
+            open: root.querySelector(".target-dialog").open,
+            value: input.value,
+            min: input.min,
+            max: input.max,
+            step: input.step,
+          };
+        });
+        if (!dialog.open || dialog.value !== "300" || dialog.min !== "0" ||
+            dialog.max !== "500" || dialog.step !== "10") {
+          throw new Error(`Dialog opening invariant failed: ${JSON.stringify(dialog)}`);
+        }
+        await page.locator("water-history-target-card").evaluate((card) => {
+          const input = card.shadowRoot.querySelector(".target-input");
+          input.value = "205";
+          card.shadowRoot.querySelector(".target-form")
+            .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+        });
+        const invalid = await page.evaluate(() => {
+          const root = document.querySelector("water-history-target-card").shadowRoot;
+          return {
+            calls: window.serviceCalls.length,
+            error: root.querySelector(".target-dialog-error").textContent,
+            open: root.querySelector(".target-dialog").open,
+          };
+        });
+        if (invalid.calls !== 0 || !invalid.open || !/10-L-Schritten/.test(invalid.error)) {
+          throw new Error(`Dialog validation invariant failed: ${JSON.stringify(invalid)}`);
+        }
+        await page.locator("water-history-target-card").evaluate((card) => {
+          const input = card.shadowRoot.querySelector(".target-input");
+          input.value = "200";
+          card.shadowRoot.querySelector(".target-form")
+            .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+        });
+        await page.waitForFunction(() => window.serviceCalls.length === 1);
+        const dialogCommit = await page.evaluate(() => {
+          const root = document.querySelector("water-history-target-card").shadowRoot;
+          return {
+            calls: window.serviceCalls,
+            headerTarget: root.querySelector(".target-header").textContent,
+            label: root.querySelector(".target-label").textContent,
+            open: root.querySelector(".target-dialog").open,
+          };
+        });
+        if (dialogCommit.calls[0].value !== 200 || dialogCommit.headerTarget !== "Ziel: 200 L" ||
+            dialogCommit.label !== "Ziel · 200 L" || dialogCommit.open) {
+          throw new Error(`Dialog commit invariant failed: ${JSON.stringify(dialogCommit)}`);
         }
       }
 

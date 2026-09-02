@@ -11,6 +11,7 @@ import {
   nearestHistoryPoint,
   normalizeCardConfig,
   normalizeStatisticsResponse,
+  normalizeTargetInput,
   releasePointer,
   smoothAreaPath,
   smoothLinePath,
@@ -33,7 +34,11 @@ test("browser source has one card, one service callsite, and no eval or remote l
   assert.equal((source.match(/<ha-card>/g) || []).length, 1);
   assert.equal((source.match(/\.callService\(/g) || []).length, 1);
   assert.match(source, /stroke-width:\s*1;/);
-  assert.match(source, /stroke-width:\s*44;/);
+  assert.match(source, /const hitHeight = Math\.min\(72,/);
+  assert.match(source, /<rect class="target-hit"/);
+  assert.match(source, /Ziel: —/);
+  assert.match(source, /<dialog class="target-dialog"/);
+  assert.match(source, /window\.addEventListener\("pointermove"/);
   assert.match(source, /class="history-hit"/);
   assert.match(source, /font-size:\s*14px;/);
   assert.match(source, /`Ziel · \$\{target\} L`/);
@@ -70,6 +75,18 @@ test("target values clamp and snap to ten liters", () => {
   assert.equal(valueFromY(0, 0, 200, 0, 500, 10), 500);
   assert.equal(valueFromY(120, 0, 200, 0, 500, 10), 200);
   assert.equal(valueFromY(250, 0, 200, 0, 500, 10), 0);
+});
+
+test("typed target values require range and exact ten-liter steps", () => {
+  assert.equal(normalizeTargetInput("0", 0, 500, 10), 0);
+  assert.equal(normalizeTargetInput("200", 0, 500, 10), 200);
+  assert.equal(normalizeTargetInput("500", 0, 500, 10), 500);
+  assert.equal(normalizeTargetInput("200,0", 0, 500, 10), 200);
+  assert.equal(normalizeTargetInput("", 0, 500, 10), null);
+  assert.equal(normalizeTargetInput("205", 0, 500, 10), null);
+  assert.equal(normalizeTargetInput("-10", 0, 500, 10), null);
+  assert.equal(normalizeTargetInput("510", 0, 500, 10), null);
+  assert.equal(normalizeTargetInput("not a number", 0, 500, 10), null);
 });
 
 test("statistics request is a 24-hour five-minute mean request", () => {
@@ -210,6 +227,126 @@ test("pointer cancellation and unchanged release never commit", () => {
   controller.beginPointer(2, 204);
   controller.endPointer(2);
   assert.deepEqual(commits, []);
+});
+
+test("direct target entry commits changed values exactly once", () => {
+  const previews = [];
+  const commits = [];
+  const controller = new TargetInteractionController({
+    min: 0,
+    max: 500,
+    step: 10,
+    onPreview: (value) => previews.push(value),
+    onCommit: (value, source) => commits.push({ value, source }),
+  });
+  assert.equal(controller.commitValue(300, "prompt"), false, "unknown persisted state blocks input");
+  controller.setPersisted(200);
+  assert.equal(controller.commitValue(300, "prompt"), true);
+  assert.equal(controller.commitValue(300, "prompt"), true, "same value is accepted without a write");
+  assert.deepEqual(commits, [{ value: 300, source: "prompt" }]);
+  controller.beginPointer(1, 300);
+  assert.equal(controller.commitValue(400, "prompt"), false, "active drag blocks prompt commits");
+  controller.cancelPointer(1);
+  assert.equal(previews.at(-1), 300);
+});
+
+test("header target mirrors availability and dialog validates before committing", () => {
+  const commits = [];
+  const closed = [];
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._targetHeader = {
+    attributes: new Map(),
+    disabled: false,
+    textContent: "",
+    setAttribute(name, value) { this.attributes.set(name, value); },
+  };
+  card._targetDialog = {
+    open: false,
+    close(reason) { closed.push(reason); },
+  };
+  card._targetDialogError = { textContent: "" };
+  card._targetInput = {
+    attributes: new Map(),
+    focus() {},
+    removeAttribute(name) { this.attributes.delete(name); },
+    setAttribute(name, value) { this.attributes.set(name, value); },
+    value: "205",
+  };
+  card._scheduleDraw = () => {};
+  card._controller = new TargetInteractionController({
+    min: 0,
+    max: 500,
+    step: 10,
+    onCommit: (value, source) => commits.push({ value, source }),
+  });
+  card._controller.setPersisted(200);
+
+  card._updateTargetHeader(200);
+  assert.equal(card._targetHeader.textContent, "Ziel: 200 L");
+  assert.equal(card._targetHeader.disabled, false);
+  card._onTargetFormSubmit({ preventDefault() {} });
+  assert.deepEqual(commits, []);
+  assert.deepEqual(closed, []);
+  assert.equal(card._targetInput.attributes.get("aria-invalid"), "true");
+  assert.match(card._targetDialogError.textContent, /10-L-Schritten/);
+
+  card._targetInput.value = "300";
+  card._onTargetFormSubmit({ preventDefault() {} });
+  assert.deepEqual(commits, [{ value: 300, source: "prompt" }]);
+  assert.deepEqual(closed, ["save"]);
+  card._targetInput.value = "300";
+  card._onTargetFormSubmit({ preventDefault() {} });
+  assert.equal(commits.length, 1, "submitting the current value performs no extra write");
+
+  card._updateTargetHeader("unavailable");
+  assert.equal(card._targetHeader.textContent, "Ziel: —");
+  assert.equal(card._targetHeader.disabled, true);
+});
+
+test("tablet drag survives SVG pointer capture failure without jumping and commits on window release", () => {
+  const commits = [];
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._geometry = { top: 14, bottom: 218 };
+  card._svg = { getBoundingClientRect: () => ({ top: 0, height: 250 }) };
+  card._targetHit = {
+    focus() {},
+    setPointerCapture() { throw new Error("SVG capture unsupported"); },
+    hasPointerCapture() { return false; },
+    releasePointerCapture() {},
+  };
+  card._hideHistoryInspection = () => {};
+  card._scheduleDraw = () => {};
+  card._controller = new TargetInteractionController({
+    min: 0,
+    max: 500,
+    step: 10,
+    onCommit: (value, source) => commits.push({ value, source }),
+  });
+  card._controller.setPersisted(200);
+  const event = (clientY) => ({
+    button: 0,
+    cancelable: true,
+    clientY,
+    isPrimary: true,
+    pointerId: 9,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+
+  const lineAt200 = 218 - (200 / 500) * (218 - 14);
+  card._onPointerDown(event(lineAt200 + 24));
+  assert.equal(card._controller.pointerId, 9, "capture failure must not cancel the drag");
+  assert.equal(card._controller.value, 200, "off-centre grab must not jump the value");
+  const lineAt300 = 218 - (300 / 500) * (218 - 14);
+  card._onPointerMove(event(lineAt300 + 24));
+  assert.equal(card._controller.value, 300);
+  assert.deepEqual(commits, [], "moving only previews");
+  card._onPointerUp(event(lineAt300 + 24));
+  assert.deepEqual(commits, [{ value: 300, source: "pointer" }]);
+  card._onPointerUp(event(lineAt300 + 24));
+  assert.equal(commits.length, 1, "release remains exactly-once");
 });
 
 test("keyboard repeats preview but commit once on key release", () => {
