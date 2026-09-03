@@ -10,7 +10,7 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
   const results = [];
   try {
     for (const width of [600, 768]) {
-      const page = await browser.newPage({ viewport: { width, height: 460 } });
+      const page = await browser.newPage({ viewport: { width, height: 460 }, hasTouch: true });
       await page.goto("http://127.0.0.1:8091/water-history-target-card/tests/visual-harness.html");
       await page.waitForFunction(() => window.cardReady === true);
       await page.waitForFunction(() => {
@@ -31,7 +31,7 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           headerTargetHeight: root.querySelector(".target-header").getBoundingClientRect().height,
           headerTargetColor: getComputedStyle(headerTarget).color,
           cardBackground: getComputedStyle(root.querySelector("ha-card")).backgroundColor,
-          label: root.querySelector(".target-label").textContent,
+          targetLabelPresent: Boolean(root.querySelector(".target-label")),
           stroke: getComputedStyle(target).stroke,
           strokeWidth: getComputedStyle(target).strokeWidth,
           matchingGrid,
@@ -41,9 +41,42 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
       if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
           initial.headerTargetColor !== "rgb(0, 0, 0)" ||
           initial.cardBackground !== "rgb(255, 255, 255)" ||
-          initial.label !== "Ziel · 300 L" || !initial.matchingGrid || initial.overflow) {
+          initial.targetLabelPresent || !initial.matchingGrid || initial.overflow) {
         throw new Error(`Initial visual invariant failed at ${width}px: ${JSON.stringify(initial)}`);
       }
+
+      const targetTapPoint = await page.evaluate(() => {
+        const root = document.querySelector("water-history-target-card").shadowRoot;
+        const hit = root.querySelector(".target-hit").getBoundingClientRect();
+        const line = root.querySelector(".target-line").getBoundingClientRect();
+        return {
+          x: hit.left + hit.width * 0.55,
+          y: line.top + line.height / 2,
+        };
+      });
+      await page.touchscreen.tap(targetTapPoint.x, targetTapPoint.y);
+      await page.waitForFunction(() => {
+        const root = document.querySelector("water-history-target-card").shadowRoot;
+        return root.querySelector(".history-inspector").getAttribute("display") !== "none";
+      });
+      const touchTap = await page.evaluate(() => {
+        const root = document.querySelector("water-history-target-card").shadowRoot;
+        return {
+          headerTarget: root.querySelector(".target-header").textContent,
+          history: root.querySelector(".history-tooltip-text").textContent,
+          calls: window.serviceCalls.length,
+        };
+      });
+      if (touchTap.headerTarget !== "Ziel: 300 L" ||
+          !/^\d{2}:\d{2} · \d+ L$/.test(touchTap.history) ||
+          touchTap.calls !== 0) {
+        throw new Error(`Target-overlay touch invariant failed at ${width}px: ${JSON.stringify(touchTap)}`);
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => {
+        const root = document.querySelector("water-history-target-card").shadowRoot;
+        return root.querySelector(".history-inspector").getAttribute("display") === "none";
+      });
 
       const hoverPoint = await page.evaluate(() => {
         const hit = document.querySelector("water-history-target-card")
@@ -118,11 +151,10 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           const root = document.querySelector("water-history-target-card").shadowRoot;
           return {
             historyHidden: root.querySelector(".history-inspector").getAttribute("display") === "none",
-            label: root.querySelector(".target-label").textContent,
             calls: window.serviceCalls.length,
           };
         });
-        if (!downState.historyHidden || downState.label !== "Ziel · 300 L" || downState.calls !== 0) {
+        if (!downState.historyHidden || downState.calls !== 0) {
           throw new Error(`Target pointer-down invariant failed: ${JSON.stringify(downState)}`);
         }
         await page.mouse.move(points.to.x, points.to.y, { steps: 6 });
@@ -135,12 +167,11 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           return {
             calls: window.serviceCalls,
             headerTarget: root.querySelector(".target-header").textContent,
-            label: root.querySelector(".target-label").textContent,
             aligned: Math.abs(targetY - gridY) < 0.01,
           };
         });
         if (committed.calls[0].value !== 200 || committed.headerTarget !== "Ziel: 200 L" ||
-            committed.label !== "Ziel · 200 L" || !committed.aligned) {
+            !committed.aligned) {
           throw new Error(`Drag invariant failed: ${JSON.stringify(committed)}`);
         }
       } else {
@@ -187,19 +218,18 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         await page.waitForFunction(() => window.serviceCalls.length === 1);
         await page.waitForFunction(() => {
           const root = document.querySelector("water-history-target-card")?.shadowRoot;
-          return root?.querySelector(".target-label")?.textContent === "Ziel · 200 L";
+          return root?.querySelector(".target-header")?.textContent === "Ziel: 200 L";
         });
         const dialogCommit = await page.evaluate(() => {
           const root = document.querySelector("water-history-target-card").shadowRoot;
           return {
             calls: window.serviceCalls,
             headerTarget: root.querySelector(".target-header").textContent,
-            label: root.querySelector(".target-label").textContent,
             open: root.querySelector(".target-dialog").open,
           };
         });
         if (dialogCommit.calls[0].value !== 200 || dialogCommit.headerTarget !== "Ziel: 200 L" ||
-            dialogCommit.label !== "Ziel · 200 L" || dialogCommit.open) {
+            dialogCommit.open) {
           throw new Error(`Dialog commit invariant failed: ${JSON.stringify(dialogCommit)}`);
         }
       }

@@ -440,6 +440,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._plotPoints = [];
     this._historyInspection = null;
     this._historyPointerCandidate = null;
+    this._targetPointerCandidate = null;
     this._pointerGrabOffsetY = null;
     this._controller = null;
     this._pendingTarget = null;
@@ -602,12 +603,6 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           vector-effect: non-scaling-stroke;
           pointer-events: none;
         }
-        .target-label {
-          fill: #607d8b;
-          font-size: 12px;
-          font-weight: 600;
-          pointer-events: none;
-        }
         .target-hit {
           fill: #607d8b;
           fill-opacity: 0.001;
@@ -691,7 +686,6 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
             </g>
             <g class="target">
               <line class="target-line"></line>
-              <text class="target-label" text-anchor="end"></text>
               <rect class="target-hit" tabindex="0" focusable="true" role="slider" aria-label="Zielmenge" aria-orientation="vertical"></rect>
             </g>
           </svg>
@@ -727,7 +721,6 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._historyTooltipText = this.shadowRoot.querySelector(".history-tooltip-text");
     this._targetGroup = this.shadowRoot.querySelector(".target");
     this._targetLine = this.shadowRoot.querySelector(".target-line");
-    this._targetLabel = this.shadowRoot.querySelector(".target-label");
     this._targetHit = this.shadowRoot.querySelector(".target-hit");
     this._status = this.shadowRoot.querySelector(".status");
     this._targetDialog = this.shadowRoot.querySelector(".target-dialog");
@@ -765,7 +758,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._historyHit.addEventListener("pointermove", (event) => this._onHistoryPointerMove(event), { signal });
     this._historyHit.addEventListener("pointerup", (event) => this._onHistoryPointerUp(event), { signal });
     this._historyHit.addEventListener("pointercancel", (event) => this._onHistoryPointerCancel(event), { signal });
-    this._historyHit.addEventListener("pointerleave", () => this._onHistoryPointerLeave(), { signal });
+    this._historyHit.addEventListener("pointerleave", (event) => this._onHistoryPointerLeave(event), { signal });
     if (typeof window !== "undefined") {
       window.addEventListener("pointermove", (event) => this._onPointerMove(event), {
         signal, passive: false, capture: true,
@@ -809,6 +802,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._plotPoints = [];
     this._historyInspection = null;
     this._historyPointerCandidate = null;
+    this._targetPointerCandidate = null;
     this._pointerGrabOffsetY = null;
     if (this._targetDialog?.open) this._targetDialog.close("disconnect");
     this._historyInspector?.setAttribute("display", "none");
@@ -1121,7 +1115,10 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._hideHistoryInspection();
   }
 
-  _onHistoryPointerLeave() {
+  _onHistoryPointerLeave(event) {
+    if (event?.pointerType === "touch" && this._historyPointerCandidate === null) {
+      return;
+    }
     this._historyPointerCandidate = null;
     this._hideHistoryInspection();
   }
@@ -1143,6 +1140,16 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       this._pointerGrabOffsetY = null;
       return;
     }
+    this._targetPointerCandidate =
+      event.pointerType === "touch" || event.pointerType === "pen"
+        ? {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            threshold: event.pointerType === "pen" ? 8 : 12,
+            dragging: false,
+          }
+        : null;
     if (event.cancelable) event.preventDefault();
     event.stopPropagation?.();
     try { this._targetHit.focus({ preventScroll: true }); } catch { this._targetHit.focus?.(); }
@@ -1150,6 +1157,22 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
   }
 
   _onPointerMove(event) {
+    const candidate = this._targetPointerCandidate;
+    if (
+      candidate?.pointerId === event.pointerId &&
+      !candidate.dragging
+    ) {
+      const distance = Math.hypot(
+        event.clientX - candidate.startX,
+        event.clientY - candidate.startY,
+      );
+      if (distance <= candidate.threshold) {
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation?.();
+        return;
+      }
+      candidate.dragging = true;
+    }
     if (!this._controller?.movePointer(event.pointerId, this._eventValue(event))) return;
     if (event.cancelable) event.preventDefault();
     event.stopPropagation?.();
@@ -1157,14 +1180,29 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
 
   _onPointerUp(event) {
     if (this._controller?.pointerId !== event.pointerId) return;
+    const candidate = this._targetPointerCandidate;
+    const isHistoryTap =
+      candidate?.pointerId === event.pointerId &&
+      !candidate.dragging;
+    this._targetPointerCandidate = null;
     if (event.cancelable) event.preventDefault();
     event.stopPropagation?.();
+    if (isHistoryTap) {
+      this._controller.cancelPointer(event.pointerId);
+      this._pointerGrabOffsetY = null;
+      releasePointer(this._targetHit, event.pointerId);
+      this._inspectHistoryAt(event);
+      return;
+    }
     this._controller.endPointer(event.pointerId);
     this._pointerGrabOffsetY = null;
     releasePointer(this._targetHit, event.pointerId);
   }
 
   _onPointerCancel(event) {
+    if (this._targetPointerCandidate?.pointerId === event.pointerId) {
+      this._targetPointerCandidate = null;
+    }
     if (!this._controller?.cancelPointer(event.pointerId)) return;
     if (event.cancelable) event.preventDefault();
     event.stopPropagation?.();
@@ -1373,9 +1411,6 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       height: hitHeight,
       rx: 4,
     })) this._targetHit.setAttribute(name, String(value));
-    this._targetLabel.setAttribute("x", String(geometry.right - 5));
-    this._targetLabel.setAttribute("y", String(y < geometry.top + 18 ? y + 16 : y - 7));
-    this._targetLabel.textContent = `Ziel · ${target} L`;
     this._updateTargetHeader(target);
     this._targetHit.setAttribute("aria-valuemin", String(this._config.min));
     this._targetHit.setAttribute("aria-valuemax", String(this._config.max));

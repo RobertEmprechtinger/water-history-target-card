@@ -41,10 +41,9 @@ test("browser source has one card, one service callsite, and no eval or remote l
   assert.match(source, /window\.addEventListener\("pointermove"/);
   assert.match(source, /class="history-hit"/);
   assert.match(source, /font-size:\s*14px;/);
-  assert.match(source, /`Ziel · \$\{target\} L`/);
+  assert.doesNotMatch(source, /target-label|Ziel ·/);
   assert.match(source, /\.target-header\s*\{[^}]*color:\s*#000;/s);
   assert.match(source, /\.target-line\s*\{[^}]*stroke:\s*#607d8b;/s);
-  assert.match(source, /\.target-label\s*\{[^}]*fill:\s*#607d8b;/s);
   assert.match(
     source,
     /background:\s*var\(--ha-card-background,\s*var\(--card-background-color,\s*#fff\)\);/,
@@ -180,6 +179,18 @@ test("history touch and pen inspection accepts taps but yields to scrolling and 
   });
   card._onHistoryPointerUp({ clientX: 16, clientY: 14, pointerId: 1, pointerType: "touch" });
   assert.deepEqual(inspected, [1]);
+  card._onHistoryPointerLeave({ pointerId: 1, pointerType: "touch" });
+  assert.equal(card._historyInspection, 1, "post-tap touch leave keeps the inspector visible");
+  card._onHistoryPointerLeave({ pointerId: 1, pointerType: "mouse" });
+  assert.equal(card._historyInspection, null, "mouse leave still hides the inspector");
+
+  card._onHistoryPointerDown({
+    button: 0, clientX: 10, clientY: 10, isPrimary: true, pointerId: 4, pointerType: "touch",
+  });
+  card._historyInspection = 1;
+  card._onHistoryPointerLeave({ pointerId: 4, pointerType: "touch" });
+  assert.equal(card._historyPointerCandidate, null);
+  assert.equal(card._historyInspection, null, "touch leave before release cancels the tap");
 
   card._onHistoryPointerDown({
     button: 0, clientX: 10, clientY: 10, isPrimary: true, pointerId: 2, pointerType: "pen",
@@ -196,6 +207,61 @@ test("history touch and pen inspection accepts taps but yields to scrolling and 
   assert.equal(card._historyInspection, null);
   card._onHistoryPointerCancel({ pointerId: 3 });
   card._detachRuntime();
+});
+
+test("target overlay treats touch jitter as history tap and deliberate motion as drag", () => {
+  const commits = [];
+  const inspected = [];
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._geometry = { top: 14, bottom: 218 };
+  card._svg = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 600, height: 250 }) };
+  card._targetHit = {
+    focus() {},
+    setPointerCapture() {},
+    hasPointerCapture() { return true; },
+    releasePointerCapture() {},
+  };
+  card._hideHistoryInspection = () => {};
+  card._inspectHistoryAt = (event) => {
+    inspected.push(event.pointerId);
+    return true;
+  };
+  card._scheduleDraw = () => {};
+  card._controller = new TargetInteractionController({
+    min: 0,
+    max: 500,
+    step: 10,
+    onCommit: (value, source) => commits.push({ value, source }),
+  });
+  card._controller.setPersisted(200);
+  const event = (pointerId, clientX, clientY) => ({
+    button: 0,
+    cancelable: true,
+    clientX,
+    clientY,
+    isPrimary: true,
+    pointerId,
+    pointerType: "touch",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  const lineAt200 = 218 - (200 / 500) * (218 - 14);
+
+  card._onPointerDown(event(21, 200, lineAt200));
+  card._onPointerMove(event(21, 212, lineAt200));
+  assert.equal(card._controller.value, 200, "finger jitter must not preview a target change");
+  card._onPointerUp(event(21, 212, lineAt200));
+  assert.deepEqual(inspected, [21]);
+  assert.deepEqual(commits, []);
+
+  card._onPointerDown(event(22, 200, lineAt200));
+  const lineAt300 = 218 - (300 / 500) * (218 - 14);
+  card._onPointerMove(event(22, 200, lineAt300));
+  assert.equal(card._controller.value, 300);
+  card._onPointerUp(event(22, 200, lineAt300));
+  assert.deepEqual(inspected, [21], "a deliberate drag must not open history inspection");
+  assert.deepEqual(commits, [{ value: 300, source: "pointer" }]);
 });
 
 test("pointer drag previews locally and commits exactly once on release", () => {

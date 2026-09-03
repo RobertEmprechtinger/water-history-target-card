@@ -6,7 +6,7 @@ A dependency-free Home Assistant Lovelace card that draws Recorder statistics an
 
 ## Version
 
-Current package version: **v1.0.2**.
+Current package version: **v1.0.3**.
 
 ## Installation with HACS
 
@@ -42,7 +42,9 @@ step: 10
 
 The line supports mouse, touch, pen, and keyboard. Its tablet-safe 72-pixel hit
 area keeps tracking on the window when SVG pointer capture is unavailable, and
-the grab offset prevents the line from jumping under the finger. Arrow keys
+the grab offset prevents the line from jumping under the finger. A short tap
+inside that area inspects the water history; target dragging starts only after
+deliberate movement. Arrow keys
 change one step, Page Up/Down ten steps, and Home/End select the bounds. Pointer
 cancellation never writes.
 
