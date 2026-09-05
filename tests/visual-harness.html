@@ -29,12 +29,24 @@
       const rows = Array.from({ length: 289 }, (_, index) => {
         const phase = index / 18;
         return {
-          start: now - (288 - index) * 5 * 60 * 1000,
+          start: now - (289 - index) * 5 * 60 * 1000,
+          end: now - (288 - index) * 5 * 60 * 1000,
           mean: 228 + 18 * Math.sin(phase) + 4 * Math.sin(phase * 3),
         };
       });
+      const recentMeans = [
+        200, 210, 205, 220, 220, 218, 230,
+        229, 240, 240, 238, 250, 248,
+      ];
+      recentMeans.forEach((mean, index) => {
+        rows[rows.length - recentMeans.length + index].mean = mean;
+      });
       const states = {
-        [entity]: { state: "237", last_updated: new Date(now).toISOString(), attributes: { unit_of_measurement: "L" } },
+        [entity]: {
+          state: "260",
+          last_updated: new Date(now + 30 * 1000).toISOString(),
+          attributes: { unit_of_measurement: "L" },
+        },
         [targetEntity]: { state: "300", attributes: { min: 0, max: 500, step: 10 } },
       };
       const card = document.createElement("water-history-target-card");

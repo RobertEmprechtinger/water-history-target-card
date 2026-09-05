@@ -3,6 +3,8 @@ const CARD_TAG = "water-history-target-card";
 const CHART_HEIGHT = 250;
 const HOUR_MILLISECONDS = 60 * 60 * 1000;
 const INCREASE_WINDOW_MILLISECONDS = HOUR_MILLISECONDS;
+const HISTORY_LOAD_TIMEOUT_MILLISECONDS = 30 * 1000;
+const RESUME_REFRESH_DEBOUNCE_MILLISECONDS = 1000;
 const DEFAULT_CONFIG = Object.freeze({
   config_version: 1,
   hours: 24,
@@ -140,7 +142,12 @@ export function normalizeStatisticsResponse(response, entity) {
       : [];
   const byTimestamp = new Map();
   for (const record of records) {
-    const timestamp = parseTimestamp(record?.start ?? record?.start_time);
+    const timestamp = [
+      record?.end,
+      record?.end_time,
+      record?.start,
+      record?.start_time,
+    ].map(parseTimestamp).find((candidate) => candidate !== null) ?? null;
     const mean = finiteNumber(record?.mean);
     if (timestamp !== null && mean !== null) {
       byTimestamp.set(timestamp, { timestamp, value: mean });
@@ -491,6 +498,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._nextHistoryRefreshAt = 0;
     this._historyGeneration = 0;
     this._historyTimer = null;
+    this._historyLoadStartedAt = 0;
+    this._lastResumeRefreshAt = 0;
     this._geometry = null;
     this._plotPoints = [];
     this._historyInspection = null;
@@ -849,6 +858,16 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") this._hideHistoryInspection();
       }, { signal });
+      window.addEventListener("focus", () => this._resumeHistoryRefresh(), { signal });
+      window.addEventListener("pageshow", () => this._resumeHistoryRefresh(), { signal });
+      window.addEventListener("online", () => this._resumeHistoryRefresh(), { signal });
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          this._resumeHistoryRefresh();
+        }
+      }, { signal });
     }
     if (typeof ResizeObserver === "function") {
       this._resizeObserver = new ResizeObserver(() => this._scheduleDraw());
@@ -883,6 +902,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._redrawFrame = null;
     if (this._historyTimer !== null) clearTimeout(this._historyTimer);
     this._historyTimer = null;
+    this._historyLoadStartedAt = 0;
+    this._lastResumeRefreshAt = 0;
     if (this._historyState === "loading") {
       this._historyState = this._history.length > 0 ? "ready" : "idle";
     }
@@ -928,13 +949,44 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     this._scheduleDraw();
   }
 
+  _resumeHistoryRefresh() {
+    if (!this._runtimeAttached) return;
+    const now = Date.now();
+    const elapsed = now - this._lastResumeRefreshAt;
+    if (elapsed >= 0 && elapsed < RESUME_REFRESH_DEBOUNCE_MILLISECONDS) return;
+    this._lastResumeRefreshAt = now;
+    this._historyGeneration += 1;
+    if (this._historyState === "loading") {
+      this._historyState = this._history.length > 0 ? "ready" : "idle";
+    }
+    this._nextHistoryRefreshAt = 0;
+    if (this._historyTimer !== null) clearTimeout(this._historyTimer);
+    this._historyTimer = null;
+    if (this._redrawFrame !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this._redrawFrame);
+    }
+    this._redrawFrame = null;
+    this._historyLoadStartedAt = 0;
+    this._maybeLoadHistory(true);
+    this._scheduleDraw();
+  }
+
   _maybeLoadHistory(force = false) {
     if (!this._runtimeAttached || !this._hass || typeof this._hass.callWS !== "function") return;
     const now = Date.now();
     const refreshInterval = PERIOD_MILLISECONDS[this._config.period];
     if (this._historyState === "loading") {
-      if (force) this._armHistoryRefresh(refreshInterval);
-      return;
+      const timedOut = this._historyLoadStartedAt > 0 &&
+        now - this._historyLoadStartedAt >= HISTORY_LOAD_TIMEOUT_MILLISECONDS;
+      if (!force || !timedOut) {
+        if (force) {
+          this._armHistoryRefresh(Math.min(refreshInterval, HISTORY_LOAD_TIMEOUT_MILLISECONDS));
+        }
+        return;
+      }
+      this._historyGeneration += 1;
+      this._historyState = this._history.length > 0 ? "ready" : "idle";
+      this._historyLoadStartedAt = 0;
     }
     if (!force && now < this._nextHistoryRefreshAt) return;
     const generation = ++this._historyGeneration;
@@ -942,20 +994,25 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     const hass = this._hass;
     const entity = this._config.entity;
     this._historyState = "loading";
+    this._historyLoadStartedAt = now;
     this._historyError = null;
     this._nextHistoryRefreshAt = now + refreshInterval;
-    this._armHistoryRefresh(refreshInterval);
+    this._armHistoryRefresh(Math.min(refreshInterval, HISTORY_LOAD_TIMEOUT_MILLISECONDS));
     this._scheduleDraw();
     Promise.resolve().then(() => hass.callWS(request)).then((response) => {
       if (!this._runtimeAttached || generation !== this._historyGeneration) return;
       this._history = normalizeStatisticsResponse(response, entity);
       this._historyState = "ready";
+      this._historyLoadStartedAt = 0;
+      this._armHistoryRefresh(refreshInterval);
       this._scheduleDraw();
     }).catch((error) => {
       if (!this._runtimeAttached || generation !== this._historyGeneration) return;
       this._history = [];
       this._historyState = "error";
+      this._historyLoadStartedAt = 0;
       this._historyError = error instanceof Error ? error.message : String(error);
+      this._armHistoryRefresh(refreshInterval);
       this._scheduleDraw();
     });
   }
@@ -1414,20 +1471,27 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     const currentTimestamp = parseTimestamp(
       currentState?.last_updated ?? currentState?.last_changed,
     );
+    const expectedInterval = PERIOD_MILLISECONDS[this._config.period];
+    const rateEnd =
+      currentTimestamp !== null &&
+      currentTimestamp > end &&
+      currentTimestamp - end <= expectedInterval
+        ? currentTimestamp
+        : end;
     const latest = this._history.at(-1);
     const useCurrentState =
       currentWater !== null &&
       currentTimestamp !== null &&
-      currentTimestamp <= end &&
+      currentTimestamp <= rateEnd &&
       (!latest || currentTimestamp > latest.timestamp);
     const points = useCurrentState
       ? [...this._history, { timestamp: currentTimestamp, value: currentWater }]
       : this._history;
     const rate = averagePositiveIncreaseRate(
       points,
-      end,
+      rateEnd,
       INCREASE_WINDOW_MILLISECONDS,
-      PERIOD_MILLISECONDS[this._config.period],
+      expectedInterval,
     );
     if (rate === null) {
       this._increaseHeader.textContent = "Ø Anstieg (60 min): —";

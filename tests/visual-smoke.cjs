@@ -40,7 +40,7 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         };
       });
       if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
-          !/^Ø Anstieg \(60 min\): (?:\+\d+(?:[.,]\d)?|0) L\/h$/.test(initial.increase) ||
+          !/^Ø Anstieg \(60 min\): \+\d+(?:[.,]\d)? L\/h$/.test(initial.increase) ||
           initial.headerTargetColor !== "rgb(0, 0, 0)" ||
           initial.cardBackground !== "rgb(255, 255, 255)" ||
           initial.targetLabelPresent || !initial.matchingGrid || initial.overflow) {
