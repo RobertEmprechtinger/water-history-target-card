@@ -41,12 +41,32 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
       });
       if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
           !/^Ø Anstieg \(60 min\): \+\d+(?:[.,]\d)? L\/h$/.test(initial.increase) ||
-          initial.headerTargetColor !== "rgb(0, 0, 0)" ||
+          initial.headerTargetColor !== "rgb(17, 17, 17)" ||
           initial.cardBackground !== "rgb(255, 255, 255)" ||
           initial.targetLabelPresent || !initial.matchingGrid || initial.overflow) {
         throw new Error(`Initial visual invariant failed at ${width}px: ${JSON.stringify(initial)}`);
       }
 
+      const darkTheme = await page.evaluate(() => {
+        document.documentElement.style.setProperty("--card-background-color", "#1c1c1c");
+        document.documentElement.style.setProperty("--primary-text-color", "#f1f1f1");
+        const root = document.querySelector("water-history-target-card").shadowRoot;
+        const result = {
+          headerTargetColor: getComputedStyle(root.querySelector(".target-header")).color,
+          primaryTextColor: getComputedStyle(root.querySelector(".water-value")).color,
+          cardBackground: getComputedStyle(root.querySelector("ha-card")).backgroundColor,
+        };
+        document.documentElement.style.removeProperty("--card-background-color");
+        document.documentElement.style.removeProperty("--primary-text-color");
+        return result;
+      });
+      if (darkTheme.headerTargetColor !== "rgb(241, 241, 241)" ||
+          darkTheme.headerTargetColor !== darkTheme.primaryTextColor ||
+          darkTheme.cardBackground !== "rgb(28, 28, 28)") {
+        throw new Error(
+          `Dark-theme visual invariant failed at ${width}px: ${JSON.stringify(darkTheme)}`,
+        );
+      }
       const targetTapPoint = await page.evaluate(() => {
         const root = document.querySelector("water-history-target-card").shadowRoot;
         const hit = root.querySelector(".target-hit").getBoundingClientRect();

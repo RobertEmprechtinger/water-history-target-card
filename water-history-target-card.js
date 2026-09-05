@@ -607,7 +607,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
           margin: 0 -6px 0 0;
           padding: 4px 6px;
           background: transparent;
-          color: #000;
+          color: var(--primary-text-color);
           font: inherit;
           font-size: 15px;
           font-weight: 600;

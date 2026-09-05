@@ -6,7 +6,7 @@ A dependency-free Home Assistant Lovelace card that draws Recorder statistics an
 
 ## Version
 
-Current package version: **v1.1.1**.
+Current package version: **v1.1.2**.
 
 ## Installation with HACS
 
@@ -50,6 +50,8 @@ least
 55 of the 60 minutes must be covered; otherwise the card shows `—` instead of a
 misleading zero. Periods coarser than one hour cannot provide this metric and
 also show `—`.
+
+Header text follows Home Assistant theme colors in both light and dark modes.
 
 The line supports mouse, touch, pen, and keyboard. Its tablet-safe 72-pixel hit
 area keeps tracking on the window when SVG pointer capture is unavailable, and

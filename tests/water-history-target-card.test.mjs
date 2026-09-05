@@ -47,7 +47,7 @@ test("browser source has one card, one service callsite, and no eval or remote l
   assert.match(source, /class="history-hit"/);
   assert.match(source, /font-size:\s*14px;/);
   assert.doesNotMatch(source, /target-label|Ziel ·/);
-  assert.match(source, /\.target-header\s*\{[^}]*color:\s*#000;/s);
+  assert.match(source, /\.target-header\s*\{[^}]*color:\s*var\(--primary-text-color\);/s);
   assert.match(source, /\.target-line\s*\{[^}]*stroke:\s*#607d8b;/s);
   assert.match(
     source,
