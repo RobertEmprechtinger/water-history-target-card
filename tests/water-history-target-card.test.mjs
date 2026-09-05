@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   TargetInteractionController,
   WaterHistoryTargetCard,
+  averagePositiveIncreaseRate,
   buildStatisticsRequest,
   capturePointer,
   keyboardTarget,
@@ -37,6 +38,7 @@ test("browser source has one card, one service callsite, and no eval or remote l
   assert.match(source, /const hitHeight = Math\.min\(72,/);
   assert.match(source, /<rect class="target-hit"/);
   assert.match(source, /Ziel: —/);
+  assert.match(source, /Ø Anstieg \(60 min\): —/);
   assert.match(source, /<dialog class="target-dialog"/);
   assert.match(source, /window\.addEventListener\("pointermove"/);
   assert.match(source, /class="history-hit"/);
@@ -109,6 +111,13 @@ test("statistics request is a 24-hour five-minute mean request", () => {
   });
 });
 
+test("short chart windows still request enough history for the 60-minute average", () => {
+  const end = Date.parse("2026-09-01T12:00:00.000Z");
+  const request = buildStatisticsRequest(normalizeCardConfig({ ...BASE, hours: 0.5 }), end);
+  assert.equal(request.start_time, "2026-09-01T10:55:00.000Z");
+  assert.equal(request.end_time, "2026-09-01T12:00:00.000Z");
+});
+
 test("statistics normalization handles seconds, milliseconds, ISO, invalid and duplicate rows", () => {
   const result = normalizeStatisticsResponse({
     "sensor.water": [
@@ -123,6 +132,107 @@ test("statistics normalization handles seconds, milliseconds, ISO, invalid and d
     { timestamp: 1_700_000_000_000, value: 210 },
     { timestamp: 1_700_000_400_000, value: 220 },
   ]);
+});
+
+test("60-minute average counts only positive tank changes", () => {
+  const minute = 60 * 1000;
+  const values = [100, 110, 105, 120, 120, 118, 118, 118, 118, 118, 118, 118, 118];
+  const points = values.map((value, index) => ({
+    timestamp: index * 5 * minute,
+    value,
+  }));
+  assert.equal(averagePositiveIncreaseRate(points, 60 * minute), 25);
+});
+
+test("60-minute average returns zero for reductions and plateaus", () => {
+  const minute = 60 * 1000;
+  const points = Array.from({ length: 13 }, (_, index) => ({
+    timestamp: index * 5 * minute,
+    value: 200 - index,
+  }));
+  points[7].value = points[6].value;
+  assert.equal(averagePositiveIncreaseRate(points, 60 * minute), 0);
+});
+
+test("60-minute average weights the cutoff interval and rejects sparse history", () => {
+  const minute = 60 * 1000;
+  const boundaryPoints = [
+    { timestamp: -5 * minute, value: 100 },
+    { timestamp: 5 * minute, value: 120 },
+    ...Array.from({ length: 11 }, (_, index) => ({
+      timestamp: (10 + index * 5) * minute,
+      value: 120,
+    })),
+  ];
+  assert.equal(averagePositiveIncreaseRate(boundaryPoints, 60 * minute), 10);
+
+  const sparsePoints = [
+    { timestamp: 0, value: 100 },
+    { timestamp: 5 * minute, value: 110 },
+    { timestamp: 40 * minute, value: 200 },
+    { timestamp: 45 * minute, value: 210 },
+    { timestamp: 50 * minute, value: 220 },
+    { timestamp: 55 * minute, value: 230 },
+    { timestamp: 60 * minute, value: 240 },
+  ];
+  assert.equal(averagePositiveIncreaseRate(sparsePoints, 60 * minute), null);
+  assert.equal(averagePositiveIncreaseRate(sparsePoints.slice(0, 1), 60 * minute), null);
+
+  const minimumCoverage = Array.from({ length: 12 }, (_, index) => ({
+    timestamp: (5 + index * 5) * minute,
+    value: 100,
+  }));
+  const insufficientCoverage = minimumCoverage.slice(1);
+  assert.equal(averagePositiveIncreaseRate(minimumCoverage, 60 * minute), 0);
+  assert.equal(averagePositiveIncreaseRate(insufficientCoverage, 60 * minute), null);
+});
+
+test("increase header includes the live tank value as the newest point", () => {
+  const minute = 60 * 1000;
+  const end = 60 * minute;
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._history = Array.from({ length: 12 }, (_, index) => ({
+    timestamp: index * 5 * minute,
+    value: 100,
+  }));
+  card._hass = {
+    states: { "sensor.water": {
+      state: "125",
+      last_updated: new Date(end).toISOString(),
+    } },
+  };
+  card._increaseHeader = { textContent: "" };
+  card._drawIncrease(end);
+  assert.equal(card._increaseHeader.textContent, "Ø Anstieg (60 min): +25 L/h");
+});
+
+test("increase header ignores a live reduction and rejects a stale live endpoint", () => {
+  const minute = 60 * 1000;
+  const end = 60 * minute;
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._increaseHeader = { textContent: "" };
+  card._history = Array.from({ length: 12 }, (_, index) => ({
+    timestamp: index * 5 * minute,
+    value: 100,
+  }));
+  card._hass = {
+    states: { "sensor.water": {
+      state: "90",
+      last_updated: new Date(end).toISOString(),
+    } },
+  };
+  card._drawIncrease(end);
+  assert.equal(card._increaseHeader.textContent, "Ø Anstieg (60 min): 0 L/h");
+
+  card._history = card._history.slice(0, 11);
+  card._hass.states["sensor.water"] = {
+    state: "125",
+    last_updated: new Date(52 * minute).toISOString(),
+  };
+  card._drawIncrease(end);
+  assert.equal(card._increaseHeader.textContent, "Ø Anstieg (60 min): —");
 });
 
 test("series gaps are not bridged and smooth paths stay bounded", () => {
@@ -555,6 +665,19 @@ test("only the newest target commit may update pending and error state", async (
   assert.equal(card._targetError, "Ziel konnte nicht gespeichert werden.");
   assert.deepEqual(restores, [210]);
   card._detachRuntime();
+});
+
+test("forced refresh re-arms while a recorder request is still loading", () => {
+  const card = new WaterHistoryTargetCard();
+  card._config = normalizeCardConfig(BASE);
+  card._runtimeAttached = true;
+  card._historyState = "loading";
+  const delays = [];
+  card._armHistoryRefresh = (delay) => delays.push(delay);
+  card._hass = { callWS: () => Promise.resolve({}) };
+  card._maybeLoadHistory(true);
+  assert.deepEqual(delays, [5 * 60 * 1000]);
+  card._runtimeAttached = false;
 });
 
 test("synchronous history errors are caught and refresh timer is lifecycle-safe", async () => {

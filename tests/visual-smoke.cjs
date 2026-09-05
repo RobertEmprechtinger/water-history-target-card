@@ -28,6 +28,7 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
           .some((line) => Math.abs(Number(line.getAttribute("y1")) - targetY) < 0.01);
         return {
           headerTarget: root.querySelector(".target-header").textContent,
+          increase: root.querySelector(".increase-header").textContent,
           headerTargetHeight: root.querySelector(".target-header").getBoundingClientRect().height,
           headerTargetColor: getComputedStyle(headerTarget).color,
           cardBackground: getComputedStyle(root.querySelector("ha-card")).backgroundColor,
@@ -39,6 +40,7 @@ const { chromium } = require(path.join(moduleRoot, "playwright"));
         };
       });
       if (initial.headerTarget !== "Ziel: 300 L" || initial.headerTargetHeight < 44 ||
+          !/^Ø Anstieg \(60 min\): (?:\+\d+(?:[.,]\d)?|0) L\/h$/.test(initial.increase) ||
           initial.headerTargetColor !== "rgb(0, 0, 0)" ||
           initial.cardBackground !== "rgb(255, 255, 255)" ||
           initial.targetLabelPresent || !initial.matchingGrid || initial.overflow) {

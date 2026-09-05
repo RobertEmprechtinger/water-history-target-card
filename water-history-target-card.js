@@ -1,6 +1,8 @@
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CARD_TAG = "water-history-target-card";
 const CHART_HEIGHT = 250;
+const HOUR_MILLISECONDS = 60 * 60 * 1000;
+const INCREASE_WINDOW_MILLISECONDS = HOUR_MILLISECONDS;
 const DEFAULT_CONFIG = Object.freeze({
   config_version: 1,
   hours: 24,
@@ -100,7 +102,11 @@ export function normalizeCardConfig(config) {
 export function buildStatisticsRequest(config, endTime = Date.now()) {
   const end = finiteNumber(endTime);
   if (end === null) throw new Error("A finite end time is required.");
-  const start = end - config.hours * 60 * 60 * 1000;
+  const period = PERIOD_MILLISECONDS[config.period] ?? 0;
+  const increaseLookback = period > 0 && period <= INCREASE_WINDOW_MILLISECONDS
+    ? INCREASE_WINDOW_MILLISECONDS + period
+    : INCREASE_WINDOW_MILLISECONDS;
+  const start = end - Math.max(config.hours * HOUR_MILLISECONDS, increaseLookback);
   return {
     type: "recorder/statistics_during_period",
     start_time: new Date(start).toISOString(),
@@ -155,6 +161,55 @@ export function splitSeriesByGap(points, expectedInterval, multiplier = 2.5) {
     segments.at(-1).push(point);
   }
   return segments;
+}
+
+export function averagePositiveIncreaseRate(
+  points,
+  endTime = Date.now(),
+  windowMilliseconds = INCREASE_WINDOW_MILLISECONDS,
+  expectedInterval = PERIOD_MILLISECONDS["5minute"],
+) {
+  const end = finiteNumber(endTime);
+  const window = finiteNumber(windowMilliseconds);
+  const interval = finiteNumber(expectedInterval);
+  if (
+    !Array.isArray(points) ||
+    end === null ||
+    window === null ||
+    interval === null ||
+    window <= 0 ||
+    interval <= 0 ||
+    interval > window
+  ) return null;
+
+  const start = end - window;
+  const maximumGap = interval * 2.5;
+  const usable = points
+    .map((point) => ({
+      timestamp: finiteNumber(point?.timestamp),
+      value: finiteNumber(point?.value),
+    }))
+    .filter((point) => point.timestamp !== null && point.value !== null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  let coveredMilliseconds = 0;
+  let positiveIncrease = 0;
+  for (let index = 1; index < usable.length; index += 1) {
+    const previous = usable[index - 1];
+    const current = usable[index];
+    const gap = current.timestamp - previous.timestamp;
+    if (gap <= 0 || gap > maximumGap) continue;
+    const overlapStart = Math.max(start, previous.timestamp);
+    const overlapEnd = Math.min(end, current.timestamp);
+    if (overlapEnd <= overlapStart) continue;
+    const overlap = overlapEnd - overlapStart;
+    coveredMilliseconds += overlap;
+    const difference = current.value - previous.value;
+    if (difference > 0) positiveIncrease += difference * (overlap / gap);
+  }
+
+  if (coveredMilliseconds < Math.max(interval, window - interval)) return null;
+  return positiveIncrease * (HOUR_MILLISECONDS / window);
 }
 
 function formatCoordinate(value) {
@@ -516,12 +571,24 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
         .header {
           min-width: 0;
           flex: 1 1 auto;
+        }
+        .water-value {
           color: var(--primary-text-color);
           font-size: 16px;
           font-weight: 500;
           line-height: 24px;
         }
-        .header.unavailable { color: var(--secondary-text-color); }
+        .water-value.unavailable { color: var(--secondary-text-color); }
+        .increase-header {
+          overflow: hidden;
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          font-weight: 400;
+          font-variant-numeric: tabular-nums;
+          line-height: 16px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
         .target-header {
           flex: 0 0 auto;
           appearance: none;
@@ -665,7 +732,10 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       </style>
       <ha-card>
         <div class="header-row">
-          <div class="header">Wasser: —</div>
+          <div class="header">
+            <div class="water-value">Wasser: —</div>
+            <div class="increase-header">Ø Anstieg (60 min): —</div>
+          </div>
           <button class="target-header" type="button" aria-haspopup="dialog" aria-controls="target-dialog" disabled>Ziel: —</button>
         </div>
         <div class="chart">
@@ -706,7 +776,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
         </dialog>
       </ha-card>
     `;
-    this._header = this.shadowRoot.querySelector(".header");
+    this._waterHeader = this.shadowRoot.querySelector(".water-value");
+    this._increaseHeader = this.shadowRoot.querySelector(".increase-header");
     this._targetHeader = this.shadowRoot.querySelector(".target-header");
     this._chart = this.shadowRoot.querySelector(".chart");
     this._svg = this.shadowRoot.querySelector("svg");
@@ -837,8 +908,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
   _syncEntityStates() {
     if (!this._config || !this._hass || !this._domReady) return;
     const water = finiteNumber(this._hass.states?.[this._config.entity]?.state);
-    this._header.textContent = `Wasser: ${water === null ? "—" : `${Math.round(water)} L`}`;
-    this._header.classList.toggle("unavailable", water === null);
+    this._waterHeader.textContent = `Wasser: ${water === null ? "—" : `${Math.round(water)} L`}`;
+    this._waterHeader.classList.toggle("unavailable", water === null);
     const target = finiteNumber(this._hass.states?.[this._config.target_entity]?.state);
     this._updateTargetHeader(target);
     if (
@@ -860,7 +931,11 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
   _maybeLoadHistory(force = false) {
     if (!this._runtimeAttached || !this._hass || typeof this._hass.callWS !== "function") return;
     const now = Date.now();
-    if (this._historyState === "loading") return;
+    const refreshInterval = PERIOD_MILLISECONDS[this._config.period];
+    if (this._historyState === "loading") {
+      if (force) this._armHistoryRefresh(refreshInterval);
+      return;
+    }
     if (!force && now < this._nextHistoryRefreshAt) return;
     const generation = ++this._historyGeneration;
     const request = buildStatisticsRequest(this._config, now);
@@ -868,8 +943,8 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     const entity = this._config.entity;
     this._historyState = "loading";
     this._historyError = null;
-    this._nextHistoryRefreshAt = now + PERIOD_MILLISECONDS[this._config.period];
-    this._armHistoryRefresh(PERIOD_MILLISECONDS[this._config.period]);
+    this._nextHistoryRefreshAt = now + refreshInterval;
+    this._armHistoryRefresh(refreshInterval);
     this._scheduleDraw();
     Promise.resolve().then(() => hass.callWS(request)).then((response) => {
       if (!this._runtimeAttached || generation !== this._historyGeneration) return;
@@ -1254,6 +1329,7 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
     }
     this._drawGrid(geometry);
     this._drawSeries(geometry);
+    this._drawIncrease(end);
     this._drawHistoryInspection(geometry);
     this._drawTarget(geometry);
     this._drawStatus();
@@ -1330,6 +1406,39 @@ export class WaterHistoryTargetCard extends HTMLElementBase {
       }));
     }
     this._seriesGroup.replaceChildren(...nodes);
+  }
+
+  _drawIncrease(end) {
+    const currentState = this._hass?.states?.[this._config.entity];
+    const currentWater = finiteNumber(currentState?.state);
+    const currentTimestamp = parseTimestamp(
+      currentState?.last_updated ?? currentState?.last_changed,
+    );
+    const latest = this._history.at(-1);
+    const useCurrentState =
+      currentWater !== null &&
+      currentTimestamp !== null &&
+      currentTimestamp <= end &&
+      (!latest || currentTimestamp > latest.timestamp);
+    const points = useCurrentState
+      ? [...this._history, { timestamp: currentTimestamp, value: currentWater }]
+      : this._history;
+    const rate = averagePositiveIncreaseRate(
+      points,
+      end,
+      INCREASE_WINDOW_MILLISECONDS,
+      PERIOD_MILLISECONDS[this._config.period],
+    );
+    if (rate === null) {
+      this._increaseHeader.textContent = "Ø Anstieg (60 min): —";
+      return;
+    }
+    const rounded = Math.round(rate * 10) / 10;
+    const formatted = new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: 1,
+    }).format(rounded);
+    this._increaseHeader.textContent =
+      `Ø Anstieg (60 min): ${rounded > 0 ? "+" : ""}${formatted} L/h`;
   }
 
   _drawHistoryInspection(geometry) {
@@ -1448,7 +1557,7 @@ if (typeof globalThis.window !== "undefined") {
     window.customCards.push({
       type: CARD_TAG,
       name: "Water History Target Card",
-      description: "24-hour water history with an accessible draggable target line.",
+      description: "Water history, positive 60-minute increase, and an accessible draggable target line.",
       preview: false,
     });
   }

@@ -6,7 +6,7 @@ A dependency-free Home Assistant Lovelace card that draws Recorder statistics an
 
 ## Version
 
-Current package version: **v1.0.3**.
+Current package version: **v1.1.0**.
 
 ## Installation with HACS
 
@@ -39,6 +39,14 @@ step: 10
 | `min` | no | `0` | Lower chart and target bound. |
 | `max` | no | `500` | Upper chart and target bound. |
 | `step` | no | `10` | Local snap and keyboard increment. |
+
+The secondary header line shows the average positive tank increase over the
+latest 60 minutes in liters per hour. It sums only upward differences between
+the five-minute Recorder means; decreases and plateaus contribute zero. The
+latest Home Assistant `last_updated` value closes the newest interval. At least
+55 of the 60 minutes must be covered; otherwise the card shows `—` instead of a
+misleading zero. Periods coarser than one hour cannot provide this metric and
+also show `—`.
 
 The line supports mouse, touch, pen, and keyboard. Its tablet-safe 72-pixel hit
 area keeps tracking on the window when SVG pointer capture is unavailable, and

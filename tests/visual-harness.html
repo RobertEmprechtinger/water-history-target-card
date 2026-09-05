@@ -34,7 +34,7 @@
         };
       });
       const states = {
-        [entity]: { state: "237", attributes: { unit_of_measurement: "L" } },
+        [entity]: { state: "237", last_updated: new Date(now).toISOString(), attributes: { unit_of_measurement: "L" } },
         [targetEntity]: { state: "300", attributes: { min: 0, max: 500, step: 10 } },
       };
       const card = document.createElement("water-history-target-card");
